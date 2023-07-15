@@ -22,7 +22,7 @@ rename *, lower
 gen hhidpn = hhid + pn
 destring hhidpn,replace
 keep r8cog27 r9cog27 r1?cog27 hhidpn //keep MoCA since 2006 (r8 is 2006)
-merge 1:1 hhidpn using "randhrs1992_2020v1",keep(match) keepusing(r8* r9* r1?*) nogen
+merge 1:1 hhidpn using "randhrs1992_2020v1",keep(match) keepusing(raehsamp raestrat ragender raracem raeduc r8* r9* r1?* *atotb *itot) nogen
 merge 1:1 hhidpn using "h06f4a",keep(match) keepusing(klb001c klb001d klb001e) nogen //merge with 2006 travel data from left behind
 
 
@@ -44,48 +44,64 @@ drop if missing(trip)
 
 *Cognitive function 27
 foreach x of numlist 8/15 {
-	gen cogn`x' =r`x'tr20 + r`x'ser7 + r`x'bwc20
-    recode cogn`x' (12/27=0) (0/11=1),gen(cogn`x'_b)
+	rename r`x'cog27 cog`x'
 }
-label define cogn_b 0 "Normal cognition" 1 "Possible CIND/dementia" 
-label values cogn*_b cogn_b 
-label var cogn*_b "Possible CIND/dementia" //cognition
-
 
 *Loneliness
-revrs klb020a-klb020c,replace  
-alpha klb020a-klb020c,gen(lone06) 
-label var lone06 "Loneliness" //lonely alpha=0.82
+foreach x of numlist 8/15 {
+	rename r`x'lblonely3 lonely`x'
+}
 
 *Cesd depression (also available in rand longitudinal as r8cesd)
-recode kd110-kd117 (5=0) (8 9=.)
-recode kd113 kd115 (1=0) (0=1)
-egen cesd06=rowtotal(kd110-kd117),mi
-*klb027g-klb027r likert scale one in LB
+foreach x of numlist 8/15 {
+	rename r`x'cesd cesd`x'
+}
 
+*Social isolation
 
-*IADL from COVID paper
-recode kg013 (1/10=1) (0=0),gen(msm16) //mobility, strength, motor skills
-recode kg014 kg016 kg021 kg023 kg025 kg030 (1=1) (5=0) (6 7=1) (8 9=.)
-egen adl06=rowtotal(kg014 kg016 kg021 kg023 kg025 kg030),mi
-recode adl06 (0=0) (1/6=1)
-recode kg041 kg044 kg047 kg050 kg059 (1=1) (5=0) (6 7=1) (8 9=.)
-egen iadl06=rowtotal(kg041 kg044 kg047 kg050 kg059),mi
-recode iadl06 (0=0) (1/5=1)
-recode iadl06 (.=1) if adl06==1 //limitation in adl -> limitation in iadl
-recode iadl06 (.=0) if msm16==0 //can jog a mile -> can prepare a meal
 
 *Covariates
-rename ka019 age
+rename (r8agey_m) (age) //only use age at 2006, otherwise it is colinear with year
+label var age "Age"
 keep if age>50
-lab var age "Age"
 
-recode kx060_r (2=0),gen(men) 
-lab var men "Men"
- i.Married i.Race Education i.WealthQt i.IncomeQt 
+recode ragender (1=0) (2=1),gen(women)
+label define women 0 "Men" 1 "Women"
+label values women women
+label var women "Women"
+
+rename (raracem) (race)
+label define race 1 "White" 2 "Black" 3 "Other"
+label values race race
+label var race "Race"
+
+rename (raeduc) (edu)
+label define edu 1 "Lt high-school" 2 "GED" 3 "High school" 4 "Some college" 5 "College and above"
+label values edu edu
+label var edu "Education"
+
+foreach x of numlist 8/15 {
+	recode r`x'iadl5a (0=0) (1/5=1),gen(iadl`x')
+	recode r`x'mstat (1 2 3=1) (4/8=0),gen(married`x')
+	xtile wealth`x' = h`x'atotb,n(4)
+	xtile income`x' = h`x'itot,n(4)
+	} //IADL: any difficulty using a telephone, taking medication, handling money, shopping, preparing meals
+
 
 *reshape wide to long
-reshape long
+keep married* iadl* edu race women age cesd* lonely* cog* trip income* wealth* hhidpn raehsamp r8lbwgtr raestrat
+reshape long married iadl income wealth cesd lonely cog, i(hhidpn) j(year)
+
+recode year (8=0) (9=2) (10=4) (11=6) (12=8) (13=10) (14=12) (15=14)
+
+lab var cesd "Depressive symptoms"
+lab var lonely "Loneliness"
+lab var cog "Cognitive function"
+lab var iadl "IADL"
+lab var married "Married"
+lab var income "Household income"
+lab var wealth "Household wealth"
+
 
 
 ************************************************************************
@@ -93,15 +109,43 @@ reshape long
 ************************************************************************
 
 
-xtset hhidpn time
-xtreg cog27 c.time##i.travel 06controls
+*2006 only
+preserve
 
-*Multilevel growth curve model
-mixed cog27 c.time##i.travel 06controls || hhidpn : time, var cov(unstr)
 
-foreach x in cogtot27_imp2006 Depression8_2_3 Loneliness Isolation_1 {
-	reg `x' i.TripGRPs age i.Sex i.Married i.Race Education i.WealthQt i.IncomeQt i.iadl06,vce(robust)
+keep if year==0
+drop if missing(cog lonely cesd)
+svyset raehsamp [pw=r8lbwgtr], strata(raestrat) //raehsamp and raestrat fix variance
+desctable i.edu i.race i.women age i.married i.iadl i.income i.wealth cog lonely cesd, filename("descriptives") stats(svymean sd n) group(trip) listwise
 
+eststo clear
+foreach x in cog lonely cesd {
+	eststo `x'1 : reg `x' i.trip i.edu i.race i.women age i.married i.iadl i.income i.wealth ,vce(robust)
+	eststo `x'2 : svy: reg `x' i.trip i.edu i.race i.women age i.married i.iadl i.income i.wealth
 }
+esttab *1 using "reg.csv",label replace b(%5.3f) se(%5.3f) r2 nogap compress nonum noomitted nobase noconstant
+esttab *2 using "reg.csv",label append b(%5.3f) se(%5.3f) r2 nogap compress nonum noomitted nobase noconstant
+
+foreach x in cog lonely cesd {
+svy: reg `x' i.trip i.edu i.race i.women age i.married i.iadl i.income i.wealth
+margins i.trip
+mplotoffset, tit("") ytit("`: var label `x''",size(medlarge)) xtit("") xlab(,labsize(medlarge)) recastci(rarea) ciopt(color(%30)) legend(off) saving(`x',replace) 
+}
+graph combine "cog" "lonely" "cesd"
+graph export "figure.tif", replace
+
+
+
+restore
+
+
+
+*Multilevel growth curve model (no sig when age>65)
+
+mixed cog c.year##i.trip i.edu i.race i.women age i.married i.iadl i.income i.wealth || hhidpn : c.year, var cov(unstr) vce(robust)
+margins i.trip, at(year= (0 (2) 14))
+marginsplot, ytit("Cognitive function",size(medlarge)) xtit("Years since 2006",size(medlarge))
+graph export "longitudinal.tif", replace
+
 
 fre CIND Depression8_2_3 Age Sex Married Race Education WealthQt IncomeQt HBP Diabetes Lung Heart Arthritis Stroke Loneliness Isolation_1 TripGRPs
