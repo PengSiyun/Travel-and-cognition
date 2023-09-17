@@ -22,7 +22,7 @@ rename *, lower
 gen hhidpn = hhid + pn
 destring hhidpn,replace
 keep r8cog27 r9cog27 r1?cog27 hhidpn //keep MoCA since 2006 (r8 is 2006)
-merge 1:1 hhidpn using "randhrs1992_2020v1",keep(match) keepusing(raehsamp raestrat ragender raracem raeduc r8* r9* r1?* *atotb *itot) nogen
+merge 1:1 hhidpn using "randhrs1992_2020v1",keep(match) keepusing(raehsamp raestrat ragender raracem raeduc raedyrs r8* r9* r1?* *atotb *itot) nogen
 merge 1:1 hhidpn using "h06f4a",keep(match) keepusing(klb001c klb001d klb001e) nogen //merge with 2006 travel data from left behind
 
 
@@ -38,7 +38,7 @@ replace trip=3 if klb001d==1 //aboard
 replace trip=. if klb001c==. & klb001d==. & klb001e==. //missing when all 3 missing
 replace trip=0 if klb001c==5 & klb001d==5 & klb001e==5 //no trip when all 3 no
 recode trip (5=0) //cases local=0 but missing on Domestic & Aboard
-lab define trip 0 "No trip" 1 "Local" 2 "Domestic" 3 "Aboard"
+lab define trip 0 "No trip" 1 "Local" 2 "Domestic" 3 "International"
 lab values trip trip
 drop if missing(trip)
 
@@ -71,14 +71,20 @@ label values women women
 label var women "Women"
 
 rename (raracem) (race)
-label define race 1 "White" 2 "Black" 3 "Other"
+recode race (1=1) (2 3=0)
+label define race 1 "White" 0 "Non-White"
 label values race race
 label var race "Race"
 
+/*
 rename (raeduc) (edu)
 label define edu 1 "Lt high-school" 2 "GED" 3 "High school" 4 "Some college" 5 "College and above"
 label values edu edu
 label var edu "Education"
+*/
+rename raedyrs edu
+label var edu "Education"
+
 
 foreach x of numlist 8/15 {
 	recode r`x'iadl5a (0=0) (1/5=1),gen(iadl`x')
@@ -114,24 +120,32 @@ preserve
 
 
 keep if year==0
-drop if missing(cog lonely cesd)
+drop if missing(cog, lonely, cesd)
 svyset raehsamp [pw=r8lbwgtr], strata(raestrat) //raehsamp and raestrat fix variance
-desctable i.edu i.race i.women age i.married i.iadl i.income i.wealth cog lonely cesd, filename("descriptives") stats(svymean sd n) group(trip) listwise
+desctable edu i.race i.women age i.married i.iadl i.income i.wealth cog lonely cesd, filename("descriptives") stats(svymean sd n) group(trip) listwise
+foreach x in cog lonely cesd age {
+	svy: reg `x' i.trip 
+}
+foreach x in edu race women married iadl income wealth {
+    tab `x' trip, chi2 
+}
+
+pwcorr cog lonely cesd trip,sig
 
 eststo clear
 foreach x in cog lonely cesd {
-	eststo `x'1 : reg `x' i.trip i.edu i.race i.women age i.married i.iadl i.income i.wealth ,vce(robust)
-	eststo `x'2 : svy: reg `x' i.trip i.edu i.race i.women age i.married i.iadl i.income i.wealth
+	eststo `x'1 : reg `x' i.trip edu i.race i.women age i.married i.iadl i.income i.wealth ,vce(robust)
+	eststo `x'2 : svy: reg `x' i.trip edu i.race i.women age i.married i.iadl i.income i.wealth
 }
 esttab *1 using "reg.csv",label replace b(%5.3f) se(%5.3f) r2 nogap compress nonum noomitted nobase noconstant
 esttab *2 using "reg.csv",label append b(%5.3f) se(%5.3f) r2 nogap compress nonum noomitted nobase noconstant
 
 foreach x in cog lonely cesd {
-svy: reg `x' i.trip i.edu i.race i.women age i.married i.iadl i.income i.wealth
+svy: reg `x' i.trip edu i.race i.women age i.married i.iadl i.income i.wealth
 margins i.trip
 mplotoffset, tit("") ytit("`: var label `x''",size(medlarge)) xtit("") xlab(,labsize(medlarge)) recastci(rarea) ciopt(color(%30)) legend(off) saving(`x',replace) 
 }
-graph combine "cog" "lonely" "cesd"
+graph combine "cog" "lonely" "cesd",imargin(0 0 0 0)
 graph export "figure.tif", replace
 
 
